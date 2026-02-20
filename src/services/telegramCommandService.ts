@@ -76,8 +76,23 @@ export class TelegramCommandService {
       return;
     }
 
+    if (command === "/alerts") {
+      const rows = await this.store.getRecentAlerts(5);
+      if (rows.length === 0) {
+        await this.telegram.sendMessage("No alerts found in DB yet.", chatId);
+        return;
+      }
+
+      await this.telegram.sendMessage(`Resending last ${rows.length} alert${rows.length === 1 ? "" : "s"}...`, chatId);
+      for (const row of [...rows].reverse()) {
+        const sanitized = row.messageText.replaceAll("<=", "≤").replaceAll(">=", "≥");
+        await this.telegram.sendMessage(sanitized, chatId);
+      }
+      return;
+    }
+
     if (command === "/help" || command === "/start") {
-      await this.telegram.sendMessage(["Available commands:", "/xsp", "/scan", "/help"].join("\n"), chatId);
+      await this.telegram.sendMessage(["Available commands:", "/xsp", "/scan", "/alerts", "/help"].join("\n"), chatId);
       return;
     }
   }

@@ -140,10 +140,11 @@ export class PaperStore {
         latest_unlevered_return_pct: 0,
         latest_leveraged_return_pct: 0,
         latest_unrealized_pnl_usd: 0,
+        latest_funding_accrued_usd: 0,
         latest_mark_ts_ms: input.entryTsMs
       })
       .select(
-        "id,symbol,entry_price,entry_ts_ms,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct"
+        "id,symbol,entry_price,entry_ts_ms,signal_hour_volume,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct,latest_funding_accrued_usd"
       )
       .single();
 
@@ -154,6 +155,7 @@ export class PaperStore {
       symbol: String(data.symbol),
       entryPrice: Number(data.entry_price),
       entryTsMs: Number(data.entry_ts_ms),
+      signalHourVolume: Number(data.signal_hour_volume),
       leverage: Number(data.leverage),
       marginUsd: Number(data.margin_usd),
       notionalUsd: Number(data.notional_usd),
@@ -162,7 +164,8 @@ export class PaperStore {
       deltaExitThreshold: Number(data.delta_exit_threshold),
       latestMarkPrice: Number(data.latest_mark_price),
       latestLeveragedReturnPct: Number(data.latest_leveraged_return_pct),
-      latestUnleveredReturnPct: Number(data.latest_unlevered_return_pct)
+      latestUnleveredReturnPct: Number(data.latest_unlevered_return_pct),
+      latestFundingAccruedUsd: Number(data.latest_funding_accrued_usd)
     };
   }
 
@@ -172,7 +175,8 @@ export class PaperStore {
     tsMs: number,
     unleveredReturnPct: number,
     leveragedReturnPct: number,
-    unrealizedPnlUsd: number
+    unrealizedPnlUsd: number,
+    fundingAccruedUsd: number
   ): Promise<void> {
     const { error } = await this.db
       .from("xsp_positions")
@@ -182,6 +186,7 @@ export class PaperStore {
         latest_unlevered_return_pct: unleveredReturnPct,
         latest_leveraged_return_pct: leveragedReturnPct,
         latest_unrealized_pnl_usd: unrealizedPnlUsd,
+        latest_funding_accrued_usd: fundingAccruedUsd,
         updated_at: new Date().toISOString()
       })
       .eq("id", positionId)
@@ -230,7 +235,7 @@ export class PaperStore {
     const { data, error } = await this.db
       .from("xsp_positions")
       .select(
-        "id,symbol,entry_price,entry_ts_ms,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct"
+        "id,symbol,entry_price,entry_ts_ms,signal_hour_volume,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct,latest_funding_accrued_usd"
       )
       .eq("status", "OPEN")
       .order("entry_ts_ms", { ascending: true });
@@ -241,6 +246,7 @@ export class PaperStore {
       symbol: String(r.symbol),
       entryPrice: Number(r.entry_price),
       entryTsMs: Number(r.entry_ts_ms),
+      signalHourVolume: Number(r.signal_hour_volume),
       leverage: Number(r.leverage),
       marginUsd: Number(r.margin_usd),
       notionalUsd: Number(r.notional_usd),
@@ -249,7 +255,8 @@ export class PaperStore {
       deltaExitThreshold: Number(r.delta_exit_threshold),
       latestMarkPrice: r.latest_mark_price === null ? null : Number(r.latest_mark_price),
       latestLeveragedReturnPct: r.latest_leveraged_return_pct === null ? null : Number(r.latest_leveraged_return_pct),
-      latestUnleveredReturnPct: r.latest_unlevered_return_pct === null ? null : Number(r.latest_unlevered_return_pct)
+      latestUnleveredReturnPct: r.latest_unlevered_return_pct === null ? null : Number(r.latest_unlevered_return_pct),
+      latestFundingAccruedUsd: r.latest_funding_accrued_usd === null ? null : Number(r.latest_funding_accrued_usd)
     }));
   }
 
@@ -257,7 +264,7 @@ export class PaperStore {
     const { data, error } = await this.db
       .from("xsp_positions")
       .select(
-        "id,symbol,entry_price,entry_ts_ms,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct"
+        "id,symbol,entry_price,entry_ts_ms,signal_hour_volume,leverage,margin_usd,notional_usd,entry_sell_ratio,take_profit_pct,delta_exit_threshold,latest_mark_price,latest_leveraged_return_pct,latest_unlevered_return_pct,latest_funding_accrued_usd"
       )
       .eq("status", "OPEN")
       .eq("symbol", symbol)
@@ -271,6 +278,7 @@ export class PaperStore {
       symbol: String(data.symbol),
       entryPrice: Number(data.entry_price),
       entryTsMs: Number(data.entry_ts_ms),
+      signalHourVolume: Number(data.signal_hour_volume),
       leverage: Number(data.leverage),
       marginUsd: Number(data.margin_usd),
       notionalUsd: Number(data.notional_usd),
@@ -279,7 +287,8 @@ export class PaperStore {
       deltaExitThreshold: Number(data.delta_exit_threshold),
       latestMarkPrice: data.latest_mark_price === null ? null : Number(data.latest_mark_price),
       latestLeveragedReturnPct: data.latest_leveraged_return_pct === null ? null : Number(data.latest_leveraged_return_pct),
-      latestUnleveredReturnPct: data.latest_unlevered_return_pct === null ? null : Number(data.latest_unlevered_return_pct)
+      latestUnleveredReturnPct: data.latest_unlevered_return_pct === null ? null : Number(data.latest_unlevered_return_pct),
+      latestFundingAccruedUsd: data.latest_funding_accrued_usd === null ? null : Number(data.latest_funding_accrued_usd)
     };
   }
 
@@ -292,6 +301,23 @@ export class PaperStore {
       message_text: message
     });
     if (error) throw error;
+  }
+
+  async getRecentAlerts(limit = 5): Promise<Array<{ id: string; eventType: string; symbol: string; messageText: string; createdAt: string }>> {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const { data, error } = await this.db
+      .from("xsp_alerts")
+      .select("id,event_type,symbol,message_text,created_at")
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
+    if (error) throw error;
+    return (data ?? []).map((r) => ({
+      id: String(r.id),
+      eventType: String(r.event_type),
+      symbol: String(r.symbol),
+      messageText: String(r.message_text ?? ""),
+      createdAt: String(r.created_at ?? "")
+    }));
   }
 
   async getSummary(startingEquityUsd: number): Promise<LiveSummary> {
@@ -312,6 +338,7 @@ export class PaperStore {
         marginInUseUsd: 0,
         openNotionalUsd: 0,
         unrealizedPnlUsd: 0,
+        openFundingAccruedUsd: 0,
         realizedPnlUsd: 0,
         currentEquityUsd: startingEquityUsd,
         totalPnlUsd: 0,
@@ -333,6 +360,7 @@ export class PaperStore {
       marginInUseUsd: Number(row.margin_in_use_usd ?? 0),
       openNotionalUsd: Number(row.open_notional_usd ?? 0),
       unrealizedPnlUsd: Number(row.unrealized_pnl_usd ?? 0),
+      openFundingAccruedUsd: Number(row.open_funding_accrued_usd ?? 0),
       realizedPnlUsd: Number(row.realized_pnl_usd ?? 0),
       currentEquityUsd: Number(row.current_equity_usd ?? startingEquityUsd),
       totalPnlUsd: Number(row.total_pnl_usd ?? 0),

@@ -18,7 +18,7 @@ telegram:
 
 strategy:
   id: "xsp-paper:v16"
-  title: "Bybit Extreme Sell Pressure v16 (Paper)"
+  title: "Bybit Extreme Sell Pressure v17 (Paper)"
   sellRatioMax: 0.2
   minHourVolume: 1000000
   leverage: 5
@@ -35,6 +35,11 @@ strategy:
   minActiveCashUsd: 25
   reconcileDowntimeExits: true
   downtimeLookbackHoursMax: 72
+  exits:
+    tpEnabled: true
+    deltaEnabled: true
+    liqEnabled: true
+    timeEnabled: false
 
 costs:
   useFees: true
@@ -42,6 +47,19 @@ costs:
   takerFeeBps: 6
   entrySlippageBps: 12
   exitSlippageBps: 12
+  dynamicSlippage:
+    enabled: true
+    minBps: 4
+    maxBps: 45
+    volumeReferenceUsd: 1000000
+    volumeExponent: 0.5
+    spreadMultiplier: 2
+    entryBiasBps: 0
+    exitBiasBps: 2
+  tpFromRealizedEntry:
+    enabled: true
+    includeEntryFee: true
+    includeEntrySlippage: true
 
 funding:
   enabled: true

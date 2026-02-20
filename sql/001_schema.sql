@@ -62,6 +62,7 @@ create table if not exists xsp_positions (
   latest_unlevered_return_pct numeric,
   latest_leveraged_return_pct numeric,
   latest_unrealized_pnl_usd numeric,
+  latest_funding_accrued_usd numeric not null default 0,
 
   exit_ts_ms bigint,
   exit_price numeric,

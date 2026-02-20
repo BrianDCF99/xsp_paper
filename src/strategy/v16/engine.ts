@@ -1,5 +1,5 @@
 import { AppConfig } from "../../config/schema.js";
-import { ExitReason, OpenPositionRow, StrategyMessageEvent } from "../../domain/types.js";
+import { ExitReason, OpenPositionRow, StrategyMessageEvent, TickerSnapshot } from "../../domain/types.js";
 import { BybitClient } from "../../infra/bybit/client.js";
 import { PaperStore } from "../../infra/db/paperStore.js";
 import { TelegramClient } from "../../infra/telegram/client.js";
@@ -13,7 +13,7 @@ import {
   qtyFromNotional,
   shortUnleveredReturnPct
 } from "./math.js";
-import { formatEntryMessage, formatExitMessage } from "./messages.js";
+import { formatEntryMessage, formatExitMessage, formatFundingEventMessage } from "./messages.js";
 import { V16SignalDetector } from "./signalDetector.js";
 
 function sleep(ms: number): Promise<void> {
@@ -171,21 +171,25 @@ export class XspV16PaperEngine {
     }
 
     const notionalUsd = marginUsd * this.cfg.strategy.leverage;
-    const qty = qtyFromNotional(notionalUsd, decision.nextOpenPrice);
+    const entryTicker = await this.bybit.getTicker(decision.symbol);
+    const entrySlippageBps = this.estimateDynamicSlippageBps("entry", decision.closedHourVolume, entryTicker);
+    const realizedEntryPrice = this.applyExecutionSlippage(decision.nextOpenPrice, entrySlippageBps, "entry");
+    const adjustedTakeProfitPct = this.computeAdjustedTakeProfitPct(entrySlippageBps);
+    const qty = qtyFromNotional(notionalUsd, realizedEntryPrice);
 
     const row = await this.store.openPosition({
       symbol: decision.symbol,
       signalId,
       entryTsMs: decision.closedHourEndMs,
       signalHourStartMs: decision.closedHourStartMs,
-      entryPrice: decision.nextOpenPrice,
+      entryPrice: realizedEntryPrice,
       entrySellRatio: decision.signalSellRatio,
       closedHourVolume: decision.closedHourVolume,
       leverage: this.cfg.strategy.leverage,
       marginUsd,
       notionalUsd,
       qty,
-      takeProfitPct: this.cfg.strategy.takeProfitPct,
+      takeProfitPct: adjustedTakeProfitPct,
       deltaExitThreshold: this.cfg.strategy.deltaExitThreshold,
       replaceThresholdPct: this.cfg.strategy.replaceThresholdPct
     });
@@ -204,8 +208,9 @@ export class XspV16PaperEngine {
         sellRatioThreshold: this.cfg.strategy.sellRatioMax,
         hourVolume: decision.closedHourVolume,
         volumeThreshold: this.cfg.strategy.minHourVolume,
-        entryPrice: decision.nextOpenPrice,
-        takeProfitPrice: decision.nextOpenPrice * (1 - this.cfg.strategy.takeProfitPct),
+        entryPrice: realizedEntryPrice,
+        takeProfitPrice: realizedEntryPrice * (1 - adjustedTakeProfitPct),
+        entrySlippageBps,
         replacedSymbol: replaced?.symbol,
         replacedPnlPct: replaced?.latestLeveragedReturnPct ?? undefined,
         replacedUnleveredPct: replaced?.latestUnleveredReturnPct ?? undefined,
@@ -256,8 +261,11 @@ export class XspV16PaperEngine {
       const unlev = shortUnleveredReturnPct(pos.entryPrice, mark);
       const lev = leveragedReturnPct(unlev, pos.leverage);
       const grossPnl = pnlUsdFromUnleveredPct(pos.marginUsd, pos.leverage, unlev);
+      const fundingAccruedUsd = await this.computeFundingUsd(pos.symbol, pos.notionalUsd, pos.entryTsMs, nowTs);
+      const unrealizedPnlWithFunding = grossPnl + fundingAccruedUsd;
 
-      await this.store.updatePositionMark(pos.id, mark, nowTs, unlev, lev, grossPnl);
+      await this.store.updatePositionMark(pos.id, mark, nowTs, unlev, lev, unrealizedPnlWithFunding, fundingAccruedUsd);
+      await this.processFundingEvents(pos, nowTs);
 
       const exit = await this.decideExit(pos, unlev, nowTs);
       if (!exit) continue;
@@ -278,20 +286,22 @@ export class XspV16PaperEngine {
 
   private async decideExit(pos: OpenPositionRow, unleveredPct: number, nowTs: number): Promise<ExitReason | null> {
     const liqUnlev = liquidationThresholdUnleveredPct(pos.leverage);
-    if (unleveredPct <= liqUnlev) return "LIQ";
+    if (this.cfg.strategy.exits.liqEnabled && unleveredPct <= liqUnlev) return "LIQ";
 
     const tpPct = pos.takeProfitPct * 100;
-    if (unleveredPct >= tpPct) return "TP";
+    if (this.cfg.strategy.exits.tpEnabled && unleveredPct >= tpPct) return "TP";
 
     // Delta exit: current hourly sell-ratio - entry sell-ratio >= threshold.
-    const ratios = await this.bybit.getAccountRatio1h(pos.symbol, 2);
-    const latest = ratios.at(-1)?.sellRatio ?? null;
-    if (latest !== null) {
-      const delta = latest - pos.entrySellRatio;
-      if (delta >= pos.deltaExitThreshold) return "DELTA";
+    if (this.cfg.strategy.exits.deltaEnabled) {
+      const ratios = await this.bybit.getAccountRatio1h(pos.symbol, 2);
+      const latest = ratios.at(-1)?.sellRatio ?? null;
+      if (latest !== null) {
+        const delta = latest - pos.entrySellRatio;
+        if (delta >= pos.deltaExitThreshold) return "DELTA";
+      }
     }
 
-    if (this.cfg.strategy.maxHoldHours > 0) {
+    if (this.cfg.strategy.exits.timeEnabled && this.cfg.strategy.maxHoldHours > 0) {
       const heldMs = nowTs - pos.entryTsMs;
       if (heldMs >= this.cfg.strategy.maxHoldHours * HOUR_MS) return "TIME";
     }
@@ -300,24 +310,32 @@ export class XspV16PaperEngine {
   }
 
   private async closePositionWithAlert(pos: OpenPositionRow, exitReason: ExitReason, exitTsMs: number, exitPrice: number): Promise<void> {
-    const unlev = shortUnleveredReturnPct(pos.entryPrice, exitPrice);
+    const latestHourVolume = await this.getLatestClosedHourVolume(pos.symbol);
+    const ticker = await this.bybit.getTicker(pos.symbol);
+    const exitSlippageBps = this.estimateDynamicSlippageBps("exit", latestHourVolume ?? this.cfg.strategy.minHourVolume, ticker);
+    const realizedExitPrice = this.applyExecutionSlippage(exitPrice, exitSlippageBps, "exit");
+    const unlev = shortUnleveredReturnPct(pos.entryPrice, realizedExitPrice);
     const lev = leveragedReturnPct(unlev, pos.leverage);
     const grossPnl = pnlUsdFromUnleveredPct(pos.marginUsd, pos.leverage, unlev);
-    const costs = applyCosts(pos.notionalUsd, this.cfg.costs, pos.entryPrice, exitPrice);
+    const costs = applyCosts(pos.notionalUsd, this.cfg.costs, pos.entryPrice, realizedExitPrice, {
+      entrySlippageBps: 0,
+      exitSlippageBps: 0
+    });
     const fundingUsd = await this.computeFundingUsd(pos.symbol, pos.notionalUsd, pos.entryTsMs, exitTsMs);
     const pnl = grossPnl - costs.totalCostUsd + fundingUsd;
+    const slippageUsd = this.cfg.costs.useSlippage ? pos.notionalUsd * (exitSlippageBps / 10_000) : 0;
 
     await this.store.closePosition({
       positionId: pos.id,
       symbol: pos.symbol,
       exitTsMs,
-      exitPrice,
+      exitPrice: realizedExitPrice,
       exitReason,
       unleveredReturnPct: unlev,
       leveragedReturnPct: lev,
       pnlUsd: pnl,
       feesUsd: costs.totalFeesUsd,
-      slippageUsd: costs.totalSlippageUsd,
+      slippageUsd,
       netFundingFeeUsd: fundingUsd
     });
 
@@ -329,7 +347,9 @@ export class XspV16PaperEngine {
         leverage: pos.leverage,
         leveragedReturnPct: lev,
         unleveredReturnPct: unlev,
-        netFundingFeeUsd: fundingUsd
+        netFundingFeeUsd: fundingUsd,
+        entrySlippageBps: this.estimateEntrySlippageBpsForPosition(pos),
+        exitSlippageBps
       },
       pos.id
     );
@@ -359,8 +379,8 @@ export class XspV16PaperEngine {
       const candleEnd = candleStart + HOUR_MS;
       if (candleEnd <= windowStart || candleStart > nowTs) continue;
 
-      const hitLiq = candle.high >= liqPrice;
-      const hitTp = candle.low <= tpPrice;
+      const hitLiq = this.cfg.strategy.exits.liqEnabled && candle.high >= liqPrice;
+      const hitTp = this.cfg.strategy.exits.tpEnabled && candle.low <= tpPrice;
       if (!hitLiq && !hitTp) continue;
 
       if (hitLiq) {
@@ -381,7 +401,7 @@ export class XspV16PaperEngine {
       break;
     }
 
-    if (this.cfg.strategy.maxHoldHours > 0) {
+    if (this.cfg.strategy.exits.timeEnabled && this.cfg.strategy.maxHoldHours > 0) {
       const timeTs = pos.entryTsMs + this.cfg.strategy.maxHoldHours * HOUR_MS;
       if (timeTs >= windowStart && timeTs <= nowTs) {
         const timePrice = this.priceAtTsFromKlines(klines, timeTs) ?? klines.at(-1)?.close ?? pos.entryPrice;
@@ -394,21 +414,23 @@ export class XspV16PaperEngine {
       }
     }
 
-    const ratioLookback = Math.max(2, Math.min(200, hours + 4));
-    const ratios = await this.bybit.getAccountRatio1h(pos.symbol, ratioLookback);
-    for (const r of ratios) {
-      if (r.tsMs < windowStart || r.tsMs > nowTs) continue;
-      if (r.sellRatio === null) continue;
-      const delta = r.sellRatio - pos.entrySellRatio;
-      if (delta >= pos.deltaExitThreshold) {
-        const price = this.priceAtTsFromKlines(klines, r.tsMs) ?? klines.at(-1)?.close ?? pos.entryPrice;
-        candidates.push({
-          reason: "DELTA",
-          exitTsMs: r.tsMs,
-          exitPrice: price,
-          priority: 3
-        });
-        break;
+    if (this.cfg.strategy.exits.deltaEnabled) {
+      const ratioLookback = Math.max(2, Math.min(200, hours + 4));
+      const ratios = await this.bybit.getAccountRatio1h(pos.symbol, ratioLookback);
+      for (const r of ratios) {
+        if (r.tsMs < windowStart || r.tsMs > nowTs) continue;
+        if (r.sellRatio === null) continue;
+        const delta = r.sellRatio - pos.entrySellRatio;
+        if (delta >= pos.deltaExitThreshold) {
+          const price = this.priceAtTsFromKlines(klines, r.tsMs) ?? klines.at(-1)?.close ?? pos.entryPrice;
+          candidates.push({
+            reason: "DELTA",
+            exitTsMs: r.tsMs,
+            exitPrice: price,
+            priority: 3
+          });
+          break;
+        }
       }
     }
 
@@ -445,5 +467,101 @@ export class XspV16PaperEngine {
     const text = formatExitMessage(this.cfg.strategy.title, event, summary);
     const messageId = await this.telegram.sendMessage(text);
     await this.store.insertAlert(`EXIT_${event.exitReason ?? "UNKNOWN"}`, event.symbol, text, positionId, messageId);
+  }
+
+  private async processFundingEvents(pos: OpenPositionRow, nowTs: number): Promise<void> {
+    if (!this.cfg.funding.enabled) return;
+    const key = `${this.cfg.strategy.id}:funding_last_settle_ts:${pos.id}`;
+    const raw = await this.store.getRuntimeValue(key);
+    const lastSettledTs = Number(raw ?? "0") || 0;
+    const fromTs = Math.max(pos.entryTsMs, lastSettledTs > 0 ? lastSettledTs + 1 : pos.entryTsMs);
+    if (fromTs >= nowTs) return;
+
+    const points = await this.bybit.getFundingHistory(pos.symbol, fromTs, nowTs);
+    if (points.length === 0) return;
+
+    const signedRates = points.map((p) => (this.cfg.funding.shortReceivesWhenPositive ? p.fundingRate : -p.fundingRate));
+    const fundingDeltaUsd = pos.notionalUsd * signedRates.reduce((a, b) => a + b, 0);
+    const lastTs = points.at(-1)?.tsMs ?? fromTs;
+
+    await this.store.setRuntimeValue(key, String(lastTs));
+
+    const message = formatFundingEventMessage(this.cfg.strategy.title, pos.symbol, fundingDeltaUsd, points.length);
+    const telegramMessageId = await this.telegram.sendMessage(message);
+    await this.store.insertAlert("FUNDING_EVENT", pos.symbol, message, pos.id, telegramMessageId);
+  }
+
+  private estimateDynamicSlippageBps(
+    side: "entry" | "exit",
+    hourVolumeUsd: number,
+    ticker: TickerSnapshot | null
+  ): number {
+    if (!this.cfg.costs.useSlippage) return 0;
+
+    const fallback = side === "entry" ? this.cfg.costs.entrySlippageBps : this.cfg.costs.exitSlippageBps;
+    if (!this.cfg.costs.dynamicSlippage.enabled) return fallback;
+
+    const dyn = this.cfg.costs.dynamicSlippage;
+    const spreadBps = this.getSpreadBps(ticker);
+    const vol = Math.max(1, Number.isFinite(hourVolumeUsd) ? hourVolumeUsd : this.cfg.strategy.minHourVolume);
+    const volumeRatio = dyn.volumeReferenceUsd / vol;
+    const volumePenalty = Math.max(0, (Math.pow(Math.max(volumeRatio, 0.0001), dyn.volumeExponent) - 1) * dyn.minBps);
+    const spreadPenalty = spreadBps * dyn.spreadMultiplier;
+    const sideBias = side === "entry" ? dyn.entryBiasBps : dyn.exitBiasBps;
+    const dynamicBps = fallback + volumePenalty + spreadPenalty + sideBias;
+
+    return Math.max(dyn.minBps, Math.min(dyn.maxBps, dynamicBps));
+  }
+
+  private getSpreadBps(ticker: TickerSnapshot | null): number {
+    if (!ticker || ticker.bid1Price === null || ticker.ask1Price === null) return 0;
+    const bid = ticker.bid1Price;
+    const ask = ticker.ask1Price;
+    if (!(Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0 && ask >= bid)) return 0;
+    const mid = (bid + ask) / 2;
+    if (!Number.isFinite(mid) || mid <= 0) return 0;
+    return ((ask - bid) / mid) * 10_000;
+  }
+
+  private applyExecutionSlippage(price: number, slippageBps: number, side: "entry" | "exit"): number {
+    if (!this.cfg.costs.useSlippage) return price;
+    const slip = slippageBps / 10_000;
+    if (!(Number.isFinite(price) && price > 0 && Number.isFinite(slip) && slip >= 0)) return price;
+    // For shorts: worse entry is lower, worse exit is higher.
+    return side === "entry" ? price * (1 - slip) : price * (1 + slip);
+  }
+
+  private computeAdjustedTakeProfitPct(entrySlippageBps: number): number {
+    const base = this.cfg.strategy.takeProfitPct;
+    if (!this.cfg.costs.tpFromRealizedEntry.enabled) return base;
+
+    let add = 0;
+    if (this.cfg.costs.tpFromRealizedEntry.includeEntrySlippage && this.cfg.costs.useSlippage) {
+      add += entrySlippageBps / 10_000;
+    }
+    if (this.cfg.costs.tpFromRealizedEntry.includeEntryFee && this.cfg.costs.useFees) {
+      add += this.cfg.costs.takerFeeBps / 10_000;
+    }
+    return base + add;
+  }
+
+  private async getLatestClosedHourVolume(symbol: string): Promise<number | null> {
+    const klines = await this.bybit.getKlines1h(symbol, 3);
+    const closed = klines.length >= 2 ? klines.at(-2) : klines.at(-1);
+    if (!closed) return null;
+    const v = Number(closed.volume);
+    return Number.isFinite(v) ? v : null;
+  }
+
+  private estimateEntrySlippageBpsForPosition(pos: OpenPositionRow): number {
+    if (!this.cfg.costs.useSlippage) return 0;
+    if (!this.cfg.costs.dynamicSlippage.enabled) return this.cfg.costs.entrySlippageBps;
+    // Uses entry-time known feature (signal hour volume), with zero spread fallback.
+    const dyn = this.cfg.costs.dynamicSlippage;
+    const vol = Math.max(1, Number.isFinite(pos.signalHourVolume) ? pos.signalHourVolume : this.cfg.strategy.minHourVolume);
+    const volumeRatio = dyn.volumeReferenceUsd / vol;
+    const volumePenalty = Math.max(0, (Math.pow(Math.max(volumeRatio, 0.0001), dyn.volumeExponent) - 1) * dyn.minBps);
+    const bps = this.cfg.costs.entrySlippageBps + volumePenalty + dyn.entryBiasBps;
+    return Math.max(dyn.minBps, Math.min(dyn.maxBps, bps));
   }
 }

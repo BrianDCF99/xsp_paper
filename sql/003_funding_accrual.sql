@@ -1,4 +1,5 @@
--- Helper objects for DB-driven summaries and command output.
+alter table if exists xsp_positions
+  add column if not exists latest_funding_accrued_usd numeric not null default 0;
 
 create or replace function xsp_summary(p_starting_equity_usd numeric)
 returns table (
@@ -75,24 +76,4 @@ select
   case when p_starting_equity_usd > 0 then ((x.current_equity_usd - p_starting_equity_usd) / p_starting_equity_usd) * 100 else 0 end as pnl_pct,
   case when (t.winners + t.losers + t.liquidated) > 0 then (t.winners::numeric / (t.winners + t.losers + t.liquidated)::numeric) * 100 else 0 end as win_pct
 from s, p, t, x;
-$$;
-
-create or replace function xsp_open_positions_for_command()
-returns table (
-  symbol text,
-  entry_price numeric,
-  leveraged_return_pct numeric,
-  entry_ts_ms bigint
-)
-language sql
-stable
-as $$
-select
-  symbol,
-  entry_price,
-  coalesce(latest_leveraged_return_pct, 0) as leveraged_return_pct,
-  entry_ts_ms
-from xsp_positions
-where status = 'OPEN'
-order by entry_ts_ms asc;
 $$;

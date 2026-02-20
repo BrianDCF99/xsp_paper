@@ -40,14 +40,35 @@ export const FileConfigSchema = z.object({
     entryMarginCapUsd: PositiveNumber,
     minActiveCashUsd: PositiveNumber,
     reconcileDowntimeExits: z.boolean(),
-    downtimeLookbackHoursMax: PositiveNumber
+    downtimeLookbackHoursMax: PositiveNumber,
+    exits: z.object({
+      tpEnabled: z.boolean().default(true),
+      deltaEnabled: z.boolean().default(true),
+      liqEnabled: z.boolean().default(true),
+      timeEnabled: z.boolean().default(false)
+    })
   }),
   costs: z.object({
     useFees: z.boolean(),
     useSlippage: z.boolean(),
     takerFeeBps: NonNegativeNumber,
     entrySlippageBps: NonNegativeNumber,
-    exitSlippageBps: NonNegativeNumber
+    exitSlippageBps: NonNegativeNumber,
+    dynamicSlippage: z.object({
+      enabled: z.boolean().default(false),
+      minBps: NonNegativeNumber.default(3),
+      maxBps: NonNegativeNumber.default(30),
+      volumeReferenceUsd: PositiveNumber.default(1_000_000),
+      volumeExponent: PositiveNumber.default(0.5),
+      spreadMultiplier: NonNegativeNumber.default(2),
+      entryBiasBps: z.number().finite().default(0),
+      exitBiasBps: z.number().finite().default(0)
+    }),
+    tpFromRealizedEntry: z.object({
+      enabled: z.boolean().default(true),
+      includeEntryFee: z.boolean().default(true),
+      includeEntrySlippage: z.boolean().default(true)
+    })
   }),
   funding: z.object({
     enabled: z.boolean(),
@@ -110,6 +131,12 @@ export interface AppConfig {
     minActiveCashUsd: number;
     reconcileDowntimeExits: boolean;
     downtimeLookbackHoursMax: number;
+    exits: {
+      tpEnabled: boolean;
+      deltaEnabled: boolean;
+      liqEnabled: boolean;
+      timeEnabled: boolean;
+    };
   };
   costs: {
     useFees: boolean;
@@ -117,6 +144,21 @@ export interface AppConfig {
     takerFeeBps: number;
     entrySlippageBps: number;
     exitSlippageBps: number;
+    dynamicSlippage: {
+      enabled: boolean;
+      minBps: number;
+      maxBps: number;
+      volumeReferenceUsd: number;
+      volumeExponent: number;
+      spreadMultiplier: number;
+      entryBiasBps: number;
+      exitBiasBps: number;
+    };
+    tpFromRealizedEntry: {
+      enabled: boolean;
+      includeEntryFee: boolean;
+      includeEntrySlippage: boolean;
+    };
   };
   funding: {
     enabled: boolean;

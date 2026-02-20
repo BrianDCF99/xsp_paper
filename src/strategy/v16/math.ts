@@ -10,6 +10,12 @@ export interface CostBreakdown {
   totalCostUsd: number;
 }
 
+export interface CostOverrides {
+  takerFeeBps?: number;
+  entrySlippageBps?: number;
+  exitSlippageBps?: number;
+}
+
 export function shortUnleveredReturnPct(entryPrice: number, exitPrice: number): number {
   if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(exitPrice) || exitPrice <= 0) return 0;
   return ((entryPrice - exitPrice) / entryPrice) * 100;
@@ -32,14 +38,19 @@ export function pnlUsdFromUnleveredPct(marginUsd: number, leverage: number, unle
 export function applyCosts(
   notionalUsd: number,
   cfg: AppConfig["costs"],
-  entry: number,
-  exit: number
+  _entry: number,
+  _exit: number,
+  overrides?: CostOverrides
 ): CostBreakdown {
-  const entryFeeUsd = cfg.useFees ? notionalUsd * (cfg.takerFeeBps / 10_000) : 0;
-  const exitFeeUsd = cfg.useFees ? notionalUsd * (cfg.takerFeeBps / 10_000) : 0;
+  const takerFeeBps = overrides?.takerFeeBps ?? cfg.takerFeeBps;
+  const entrySlippageBps = overrides?.entrySlippageBps ?? cfg.entrySlippageBps;
+  const exitSlippageBps = overrides?.exitSlippageBps ?? cfg.exitSlippageBps;
 
-  const entrySlipPct = cfg.useSlippage ? cfg.entrySlippageBps / 10_000 : 0;
-  const exitSlipPct = cfg.useSlippage ? cfg.exitSlippageBps / 10_000 : 0;
+  const entryFeeUsd = cfg.useFees ? notionalUsd * (takerFeeBps / 10_000) : 0;
+  const exitFeeUsd = cfg.useFees ? notionalUsd * (takerFeeBps / 10_000) : 0;
+
+  const entrySlipPct = cfg.useSlippage ? entrySlippageBps / 10_000 : 0;
+  const exitSlipPct = cfg.useSlippage ? exitSlippageBps / 10_000 : 0;
 
   // For a short: worse entry is lower fill; worse exit is higher buyback.
   const entrySlippageUsd = cfg.useSlippage ? notionalUsd * entrySlipPct : 0;

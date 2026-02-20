@@ -1,5 +1,5 @@
 import { LiveSummary, OpenPositionRow, StrategyMessageEvent } from "../../domain/types.js";
-import { fmtNum, fmtPct, fmtUsd, tickerLink } from "../../utils/format.js";
+import { escapeHtml, fmtNum, fmtPct, fmtUsd, tickerLink } from "../../utils/format.js";
 import { formatElapsedHhMm } from "../../utils/time.js";
 
 export function formatSummaryBlock(summary: LiveSummary): string[] {
@@ -18,21 +18,24 @@ export function formatSummaryBlock(summary: LiveSummary): string[] {
     `Margin In Use: ${fmtUsd(summary.marginInUseUsd)}`,
     `Open Notional: ${fmtUsd(summary.openNotionalUsd)}`,
     `Unrealized PnL: ${fmtUsd(summary.unrealizedPnlUsd)}`,
+    `Open Funding Accrued: ${fmtUsd(summary.openFundingAccruedUsd)}`,
     `PnL (vs start): ${fmtPct(summary.pnlPct)} | ${fmtUsd(summary.totalPnlUsd)}`,
     `Win %: ${summary.winPct.toFixed(2)}%`
   ];
 }
 
 export function formatEntryMessage(title: string, event: StrategyMessageEvent, summary: LiveSummary): string {
+  const safeTitle = escapeHtml(title);
   const lines = [
-    `🚨 <b>${title}</b>`,
+    `🚨 <b>${safeTitle}</b>`,
     "",
     event.type === "ENTRY_REPLACE_OPEN_SHORT" ? "♻️ <b>ENTRY REPLACE SHORT</b>" : "📉 <b>ENTRY OPEN SHORT</b>",
     tickerLink(event.symbol),
-    `Entry Cond 1: Sell Ratio <= ${fmtNum(event.sellRatioThreshold ?? 0, 3)} (now ${fmtNum(event.sellRatio ?? 0, 3)})`,
-    `Entry Cond 2: 1h Volume >= ${fmtNum(event.volumeThreshold ?? 0, 0)} (now ${fmtNum(event.hourVolume ?? 0, 0)})`,
+    `Entry Cond 1: Sell Ratio ≤ ${fmtNum(event.sellRatioThreshold ?? 0, 3)} (now ${fmtNum(event.sellRatio ?? 0, 3)})`,
+    `Entry Cond 2: 1h Volume ≥ ${fmtNum(event.volumeThreshold ?? 0, 0)} (now ${fmtNum(event.hourVolume ?? 0, 0)})`,
     `Entry Price: ${fmtUsd(event.entryPrice ?? 0)}`,
-    `Take Profit Price: ${fmtUsd(event.takeProfitPrice ?? 0)}`
+    `Take Profit Price: ${fmtUsd(event.takeProfitPrice ?? 0)}`,
+    `Realized Entry Slippage: ${fmtNum(event.entrySlippageBps ?? 0, 2)} bps`
   ];
 
   if (event.type === "ENTRY_REPLACE_OPEN_SHORT" && event.replacedSymbol) {
@@ -46,6 +49,7 @@ export function formatEntryMessage(title: string, event: StrategyMessageEvent, s
 }
 
 export function formatExitMessage(title: string, event: StrategyMessageEvent, summary: LiveSummary): string {
+  const safeTitle = escapeHtml(title);
   const header =
     event.exitReason === "TP"
       ? "✅ <b>EXIT TP</b>"
@@ -58,12 +62,14 @@ export function formatExitMessage(title: string, event: StrategyMessageEvent, su
             : "♻️ <b>EXIT REPLACE</b>";
 
   return [
-    `🚨 <b>${title}</b>`,
+    `🚨 <b>${safeTitle}</b>`,
     "",
     header,
     tickerLink(event.symbol),
     `PnL: ${fmtPct(event.leveragedReturnPct ?? 0)}`,
     `Leverage: ${fmtNum(event.leverage ?? 0, 2)}x | Unlev: ${fmtPct(event.unleveredReturnPct ?? 0)}`,
+    `Realized Exit Slippage: ${fmtNum(event.exitSlippageBps ?? 0, 2)} bps`,
+    `Realized Roundtrip Slippage: ${fmtNum((event.entrySlippageBps ?? 0) + (event.exitSlippageBps ?? 0), 2)} bps`,
     `Net funding fee: ${fmtUsd(event.netFundingFeeUsd ?? 0)}`,
     "",
     ...formatSummaryBlock(summary)
@@ -71,8 +77,9 @@ export function formatExitMessage(title: string, event: StrategyMessageEvent, su
 }
 
 export function formatXspCommand(title: string, summary: LiveSummary, rows: OpenPositionRow[], nowTsMs: number): string {
+  const safeTitle = escapeHtml(title);
   const lines: string[] = [
-    `🎯 <b>${title}</b>`,
+    `🎯 <b>${safeTitle}</b>`,
     "Exchange: BYBIT",
     "Scope: global strategy tracking only",
     `Tracked coins: ${rows.length}`,
@@ -99,4 +106,17 @@ export function formatXspCommand(title: string, summary: LiveSummary, rows: Open
 
   lines.push("", "📊 Live Totals", ...formatSummaryBlock(summary));
   return lines.join("\n");
+}
+
+export function formatFundingEventMessage(title: string, symbol: string, fundingDeltaUsd: number, pointsCount: number): string {
+  const safeTitle = escapeHtml(title);
+  const flow = fundingDeltaUsd >= 0 ? "coming in" : "leaving";
+  return [
+    `🚨 <b>${safeTitle}</b>`,
+    "",
+    "💸 <b>FUNDING UPDATE</b>",
+    tickerLink(symbol),
+    `Net Funding: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
+    `Settlements in update: ${fmtNum(pointsCount, 0)}`
+  ].join("\n");
 }

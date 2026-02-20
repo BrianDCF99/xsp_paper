@@ -77,6 +77,7 @@ export interface LiveSummary {
   marginInUseUsd: number;
   openNotionalUsd: number;
   unrealizedPnlUsd: number;
+  openFundingAccruedUsd: number;
   realizedPnlUsd: number;
   currentEquityUsd: number;
   totalPnlUsd: number;
@@ -89,6 +90,7 @@ export interface OpenPositionRow {
   symbol: string;
   entryPrice: number;
   entryTsMs: number;
+  signalHourVolume: number;
   leverage: number;
   marginUsd: number;
   notionalUsd: number;
@@ -98,6 +100,7 @@ export interface OpenPositionRow {
   latestMarkPrice: number | null;
   latestLeveragedReturnPct: number | null;
   latestUnleveredReturnPct: number | null;
+  latestFundingAccruedUsd: number | null;
 }
 
 export interface StrategyMessageEvent {
@@ -117,4 +120,7 @@ export interface StrategyMessageEvent {
   unleveredReturnPct?: number;
   leverage?: number;
   netFundingFeeUsd?: number;
+  entrySlippageBps?: number;
+  exitSlippageBps?: number;
+  fundingDeltaUsd?: number;
 }
