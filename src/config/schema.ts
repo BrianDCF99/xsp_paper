@@ -59,7 +59,7 @@ export const FileConfigSchema = z.object({
       minBps: NonNegativeNumber.default(3),
       maxBps: NonNegativeNumber.default(30),
       volumeReferenceUsd: PositiveNumber.default(1_000_000),
-      volumeExponent: PositiveNumber.default(0.5),
+      volumeExponent: NonNegativeNumber.default(0.5),
       spreadMultiplier: NonNegativeNumber.default(2),
       entryBiasBps: z.number().finite().default(0),
       exitBiasBps: z.number().finite().default(0)
