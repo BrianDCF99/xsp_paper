@@ -1,0 +1,48 @@
+app:
+  version: "v16"
+  scanIntervalMs: 60000
+  symbolRefreshIntervalMs: 21600000
+
+bybit:
+  baseUrl: "https://api.bybit.com"
+  category: "linear"
+  timeoutMs: 12000
+  symbolBatchSize: 50
+  maxSymbols: 340
+  requestPauseMs: 60
+
+telegram:
+  enabled: true
+  parseMode: "HTML"
+  commandPollMs: 4000
+
+strategy:
+  id: "xsp-paper:v16"
+  title: "Bybit Extreme Sell Pressure v16 (Paper)"
+  sellRatioMax: 0.2
+  minHourVolume: 1000000
+  leverage: 5
+  takeProfitPct: 0.04
+  deltaExitThreshold: 0.1
+  maxHoldHours: 0
+  maxOpenPositions: 15
+  preventDuplicateSymbols: true
+  replaceThresholdPct: 0.05
+  replaceThresholdBasis: "unlevered"
+  startingEquityUsd: 10000
+  entryMarginFraction: 0.01
+  entryMarginCapUsd: 500
+  minActiveCashUsd: 25
+  reconcileDowntimeExits: true
+  downtimeLookbackHoursMax: 72
+
+costs:
+  useFees: true
+  useSlippage: true
+  takerFeeBps: 6
+  entrySlippageBps: 12
+  exitSlippageBps: 12
+
+funding:
+  enabled: true
+  shortReceivesWhenPositive: true
