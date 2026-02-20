@@ -45,17 +45,17 @@ costs:
   useFees: true
   useSlippage: true
   takerFeeBps: 6
-  entrySlippageBps: 12
-  exitSlippageBps: 12
+  entrySlippageBps: 6
+  exitSlippageBps: 8
   dynamicSlippage:
     enabled: true
-    minBps: 4
-    maxBps: 45
+    minBps: 3
+    maxBps: 35
     volumeReferenceUsd: 1000000
-    volumeExponent: 0.5
+    volumeExponent: 0
     spreadMultiplier: 2
     entryBiasBps: 0
-    exitBiasBps: 2
+    exitBiasBps: 1
   tpFromRealizedEntry:
     enabled: true
     includeEntryFee: true
