@@ -144,3 +144,44 @@ export function formatFundingEventMessage(
     ...formatAccountUpdate(summary)
   ].join("\n");
 }
+
+export function formatInfoCommand(
+  title: string,
+  strategy: {
+    leverage: number;
+    entryMarginFraction: number;
+    entryMarginCapUsd: number;
+    sellRatioMax: number;
+    minHourVolume: number;
+    takeProfitPct: number;
+    deltaExitThreshold: number;
+    maxHoldHours: number;
+    replaceThresholdPct: number;
+    replaceThresholdBasis: "unlevered" | "levered";
+  }
+): string {
+  const marginPct = strategy.entryMarginFraction * 100;
+  const tpPct = strategy.takeProfitPct * 100;
+  const replacePct = strategy.replaceThresholdPct * 100;
+  const exitLines = [
+    `- TP: ${tpPct.toFixed(2)}%`,
+    `- Delta: Sell Ratio +${fmtNum(strategy.deltaExitThreshold, 3)}`,
+    "- Liquidation",
+    strategy.maxHoldHours > 0 ? `- Time: ${fmtNum(strategy.maxHoldHours, 0)}h` : "- Time: off",
+    `- Replacement: -${replacePct.toFixed(2)}% (${strategy.replaceThresholdBasis})`
+  ];
+
+  return [
+    strategyHeader(title),
+    "",
+    `Leverage: ${fmtNum(strategy.leverage, 2)}x`,
+    `Margin: min(${fmtUsd(strategy.entryMarginCapUsd)}, cash * ${marginPct.toFixed(2)}%)`,
+    "",
+    "Entry:",
+    `- Sell Ratio ≤ ${fmtNum(strategy.sellRatioMax, 3)}`,
+    `- 1h Volume ≥ ${fmtNum(strategy.minHourVolume, 0)}`,
+    "",
+    "Exit:",
+    ...exitLines
+  ].join("\n");
+}

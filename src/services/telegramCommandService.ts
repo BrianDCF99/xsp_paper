@@ -3,7 +3,32 @@ import { OpenPositionRow } from "../domain/types.js";
 import { PaperStore } from "../infra/db/paperStore.js";
 import { TelegramClient } from "../infra/telegram/client.js";
 import { Logger } from "../utils/logger.js";
-import { formatXspCommand } from "../strategy/v16/messages.js";
+import { formatInfoCommand, formatXspCommand } from "../strategy/v16/messages.js";
+
+function formatErrorMeta(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const out: Record<string, unknown> = {
+      name: error.name,
+      message: error.message
+    };
+    if (error.stack) out.stack = error.stack;
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (cause !== undefined) out.cause = typeof cause === "object" ? JSON.stringify(cause) : String(cause);
+    return out;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    let serialized = "";
+    try {
+      serialized = JSON.stringify(error);
+    } catch {
+      serialized = String(error);
+    }
+    return { errorType: "object", error: serialized };
+  }
+
+  return { errorType: typeof error, error: String(error) };
+}
 
 export interface ScanTrigger {
   runCycle(trigger: "timer" | "manual"): Promise<{ executed: boolean; reason?: string }>;
@@ -24,7 +49,7 @@ export class TelegramCommandService {
     if (!this.telegram.isEnabled()) return;
     this.timer = setInterval(() => {
       this.pollOnce().catch((error) => {
-        this.logger.warn("telegram poll failed", { error: error instanceof Error ? error.message : String(error) });
+        this.logger.warn("telegram poll failed", formatErrorMeta(error));
       });
     }, this.cfg.telegram.commandPollMs);
   }
@@ -55,12 +80,45 @@ export class TelegramCommandService {
   }
 
   private async handleCommand(text: string, chatId: string): Promise<void> {
-    const command = text.split(" ")[0]?.toLowerCase() ?? "";
+    const parts = text.split(/\s+/).filter(Boolean);
+    const command = parts[0]?.toLowerCase() ?? "";
 
     if (command === "/xsp") {
       const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
       const open = await this.store.getOpenPositions();
       const message = formatXspCommand(this.cfg.strategy.title, summary, open, Date.now());
+      await this.telegram.sendMessage(message, chatId);
+      return;
+    }
+
+    if (command === "/info") {
+      const requested = (parts[1] ?? "").toLowerCase();
+      const aliases = new Set([
+        "xsp",
+        "xsp-paper",
+        "xsp_paper",
+        this.cfg.strategy.id.toLowerCase(),
+        this.cfg.strategy.title.toLowerCase().replaceAll(" ", "")
+      ]);
+      if (requested && !aliases.has(requested)) {
+        await this.telegram.sendMessage(
+          `Unknown strategy '${requested}'. Try: /info xsp`,
+          chatId
+        );
+        return;
+      }
+      const message = formatInfoCommand(this.cfg.strategy.title, {
+        leverage: this.cfg.strategy.leverage,
+        entryMarginFraction: this.cfg.strategy.entryMarginFraction,
+        entryMarginCapUsd: this.cfg.strategy.entryMarginCapUsd,
+        sellRatioMax: this.cfg.strategy.sellRatioMax,
+        minHourVolume: this.cfg.strategy.minHourVolume,
+        takeProfitPct: this.cfg.strategy.takeProfitPct,
+        deltaExitThreshold: this.cfg.strategy.deltaExitThreshold,
+        maxHoldHours: this.cfg.strategy.maxHoldHours,
+        replaceThresholdPct: this.cfg.strategy.replaceThresholdPct,
+        replaceThresholdBasis: this.cfg.strategy.replaceThresholdBasis
+      });
       await this.telegram.sendMessage(message, chatId);
       return;
     }
@@ -92,7 +150,7 @@ export class TelegramCommandService {
     }
 
     if (command === "/help" || command === "/start") {
-      await this.telegram.sendMessage(["Available commands:", "/xsp", "/scan", "/alerts", "/help"].join("\n"), chatId);
+      await this.telegram.sendMessage(["Available commands:", "/xsp", "/info <strategyName>", "/scan", "/alerts", "/help"].join("\n"), chatId);
       return;
     }
   }
