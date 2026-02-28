@@ -2,40 +2,62 @@ import { LiveSummary, OpenPositionRow, StrategyMessageEvent } from "../../domain
 import { escapeHtml, fmtNum, fmtPct, fmtUsd, tickerLink } from "../../utils/format.js";
 import { formatElapsedHhMm } from "../../utils/time.js";
 
+const XSP_EMOJI = "🐦‍🔥";
+
+function strategyHeader(title: string): string {
+  return `${XSP_EMOJI} Exchange: <b>${escapeHtml(title)}</b>`;
+}
+
+function calcShortTpPrice(entryPrice: number, takeProfitPct: number): number {
+  return entryPrice * (1 - takeProfitPct);
+}
+
+function calcShortLiqPrice(entryPrice: number, leverage: number): number {
+  if (!Number.isFinite(leverage) || leverage <= 0) return entryPrice;
+  return entryPrice * (1 + 1 / leverage);
+}
+
+function unrealizedPct(summary: LiveSummary): number {
+  if (!Number.isFinite(summary.currentEquityUsd) || summary.currentEquityUsd === 0) return 0;
+  return (summary.unrealizedPnlUsd / summary.currentEquityUsd) * 100;
+}
+
+function formatAccountUpdate(summary: LiveSummary): string[] {
+  return [
+    "<b>Account Update:</b>",
+    `Eq: ${fmtUsd(summary.currentEquityUsd)} | Cash: ${fmtUsd(summary.cashUsd)}`,
+    `M: ${fmtUsd(summary.marginInUseUsd)} | N: ${fmtUsd(summary.openNotionalUsd)}`
+  ];
+}
+
 export function formatSummaryBlock(summary: LiveSummary): string[] {
   return [
-    "Totals:",
-    `Entries: ${summary.entries}`,
-    `Live Entries: ${summary.liveEntries}`,
-    `Missed Trades: ${summary.missedTrades}`,
-    `Winners: ${summary.winners}`,
-    `Losers: ${summary.losers}`,
-    `Liquidated: ${summary.liquidated}`,
-    `Replaced: ${summary.replaced}`,
-    `Open Positions: ${summary.openPositions}`,
-    `Current Equity: ${fmtUsd(summary.currentEquityUsd)}`,
-    `Cash: ${fmtUsd(summary.cashUsd)}`,
-    `Margin In Use: ${fmtUsd(summary.marginInUseUsd)}`,
-    `Open Notional: ${fmtUsd(summary.openNotionalUsd)}`,
-    `Unrealized PnL: ${fmtUsd(summary.unrealizedPnlUsd)}`,
-    `Open Funding Accrued: ${fmtUsd(summary.openFundingAccruedUsd)}`,
-    `PnL (vs start): ${fmtPct(summary.pnlPct)} | ${fmtUsd(summary.totalPnlUsd)}`,
-    `Win %: ${summary.winPct.toFixed(2)}%`
+    "<b>Live Stats:</b>",
+    `PNL: ${fmtPct(summary.pnlPct)} | ${fmtUsd(summary.totalPnlUsd)}`,
+    `Unrealized PNL: ${fmtUsd(summary.unrealizedPnlUsd)} | ${fmtPct(unrealizedPct(summary))}`,
+    `Entries: ${summary.entries} | O: ${summary.openPositions} | M: ${summary.missedTrades}`,
+    `Winners: ${summary.winners} | Losers: ${summary.losers} | Win %: ${summary.winPct.toFixed(2)}%`,
+    `Replaced: ${summary.replaced} | Liq'd: ${summary.liquidated}`,
+    `Eq: ${fmtUsd(summary.currentEquityUsd)} | Cash: ${fmtUsd(summary.cashUsd)}`,
+    `M: ${fmtUsd(summary.marginInUseUsd)} | N: ${fmtUsd(summary.openNotionalUsd)}`,
+    `Net Funding: ${fmtUsd(summary.openFundingAccruedUsd)}`
   ];
 }
 
 export function formatEntryMessage(title: string, event: StrategyMessageEvent, summary: LiveSummary): string {
-  const safeTitle = escapeHtml(title);
+  const entryPrice = event.entryPrice ?? 0;
+  const tpPrice = event.takeProfitPrice ?? calcShortTpPrice(entryPrice, 0);
+  const liqPrice = calcShortLiqPrice(entryPrice, event.leverage ?? 0);
+
   const lines = [
-    `🚨 <b>${safeTitle}</b>`,
+    strategyHeader(title),
     "",
-    event.type === "ENTRY_REPLACE_OPEN_SHORT" ? "♻️ <b>ENTRY REPLACE SHORT</b>" : "📉 <b>ENTRY OPEN SHORT</b>",
+    event.type === "ENTRY_REPLACE_OPEN_SHORT" ? "♻️ <b>Entry Replace Short</b>" : "🟢 <b>Entry</b>",
+    `- Sell Ratio ≤ ${fmtNum(event.sellRatioThreshold ?? 0, 3)} (now ${fmtNum(event.sellRatio ?? 0, 3)})`,
+    `- 1h Volume ≥ ${fmtNum(event.volumeThreshold ?? 0, 0)} (now ${fmtNum(event.hourVolume ?? 0, 0)})`,
     tickerLink(event.symbol),
-    `Entry Cond 1: Sell Ratio ≤ ${fmtNum(event.sellRatioThreshold ?? 0, 3)} (now ${fmtNum(event.sellRatio ?? 0, 3)})`,
-    `Entry Cond 2: 1h Volume ≥ ${fmtNum(event.volumeThreshold ?? 0, 0)} (now ${fmtNum(event.hourVolume ?? 0, 0)})`,
-    `Entry Price: ${fmtUsd(event.entryPrice ?? 0)}`,
-    `Take Profit Price: ${fmtUsd(event.takeProfitPrice ?? 0)}`,
-    `Realized Entry Slippage: ${fmtNum(event.entrySlippageBps ?? 0, 2)} bps`
+    `E: ${fmtUsd(entryPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
+    `Entry Slippage: ${fmtNum(event.entrySlippageBps ?? 0, 2)} bps`
   ];
 
   if (event.type === "ENTRY_REPLACE_OPEN_SHORT" && event.replacedSymbol) {
@@ -44,49 +66,43 @@ export function formatEntryMessage(title: string, event: StrategyMessageEvent, s
     lines.push(`Old Trade Unlev: ${fmtPct(event.replacedUnleveredPct ?? 0)}`);
   }
 
-  lines.push("", ...formatSummaryBlock(summary));
+  lines.push("", ...formatAccountUpdate(summary), "", ...formatSummaryBlock(summary));
   return lines.join("\n");
 }
 
 export function formatExitMessage(title: string, event: StrategyMessageEvent, summary: LiveSummary): string {
-  const safeTitle = escapeHtml(title);
-  const header =
+  const reason =
     event.exitReason === "TP"
-      ? "✅ <b>EXIT TP</b>"
+      ? "TP"
       : event.exitReason === "DELTA"
-        ? "📈 <b>EXIT DELTA</b>"
+        ? "DELTA"
         : event.exitReason === "TIME"
-          ? "⏱️ <b>EXIT TIME</b>"
+          ? "TIME"
           : event.exitReason === "LIQ"
-            ? "🟥 <b>EXIT LIQUIDATED</b>"
-            : "♻️ <b>EXIT REPLACE</b>";
+            ? "LIQUIDATED"
+            : "REPLACE";
+  const icon = (event.leveragedReturnPct ?? 0) >= 0 ? "✅" : "❌";
 
   return [
-    `🚨 <b>${safeTitle}</b>`,
+    strategyHeader(title),
     "",
-    header,
+    `${icon} <b>EXIT: ${reason}</b>`,
     tickerLink(event.symbol),
     `PnL: ${fmtPct(event.leveragedReturnPct ?? 0)}`,
-    `Leverage: ${fmtNum(event.leverage ?? 0, 2)}x | Unlev: ${fmtPct(event.unleveredReturnPct ?? 0)}`,
-    `Realized Exit Slippage: ${fmtNum(event.exitSlippageBps ?? 0, 2)} bps`,
-    `Realized Roundtrip Slippage: ${fmtNum((event.entrySlippageBps ?? 0) + (event.exitSlippageBps ?? 0), 2)} bps`,
-    `Net funding fee: ${fmtUsd(event.netFundingFeeUsd ?? 0)}`,
+    `Exit Slippage: ${fmtNum(event.exitSlippageBps ?? 0, 2)} bps`,
+    `Roundtrip Slippage: ${fmtNum((event.entrySlippageBps ?? 0) + (event.exitSlippageBps ?? 0), 2)} bps`,
+    `Funding: ${fmtUsd(event.netFundingFeeUsd ?? 0)}`,
+    "",
+    ...formatAccountUpdate(summary),
     "",
     ...formatSummaryBlock(summary)
   ].join("\n");
 }
 
 export function formatXspCommand(title: string, summary: LiveSummary, rows: OpenPositionRow[], nowTsMs: number): string {
-  const safeTitle = escapeHtml(title);
   const lines: string[] = [
-    `🎯 <b>${safeTitle}</b>`,
-    "Exchange: BYBIT",
-    "Scope: global strategy tracking only",
-    `Tracked coins: ${rows.length}`,
-    "",
-    "📉 Open Positions",
-    "",
-    "Ticker | Price at alert | pnl% | time since alert",
+    strategyHeader(title),
+    "📈 Open Positions",
     "",
     `<b>OPEN SHORT</b> - Open Positions: ${rows.length}`
   ];
@@ -95,28 +111,36 @@ export function formatXspCommand(title: string, summary: LiveSummary, rows: Open
     lines.push("(none)");
   } else {
     rows.forEach((r, i) => {
+      const currentPrice = r.latestMarkPrice ?? r.entryPrice;
+      const tpPrice = calcShortTpPrice(r.entryPrice, r.takeProfitPct);
+      const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
       lines.push(
-        `${i + 1}. ${tickerLink(r.symbol)} | ${fmtUsd(r.entryPrice)} | ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(
-          r.entryTsMs,
-          nowTsMs
-        )}`
+        `${i + 1}. ${tickerLink(r.symbol)}`,
+        `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | DD - ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
+        `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`
       );
     });
   }
 
-  lines.push("", "📊 Live Totals", ...formatSummaryBlock(summary));
+  lines.push("", ...formatSummaryBlock(summary));
   return lines.join("\n");
 }
 
-export function formatFundingEventMessage(title: string, symbol: string, fundingDeltaUsd: number, pointsCount: number): string {
-  const safeTitle = escapeHtml(title);
+export function formatFundingEventMessage(
+  title: string,
+  symbol: string,
+  fundingDeltaUsd: number,
+  pointsCount: number,
+  summary: LiveSummary
+): string {
   const flow = fundingDeltaUsd >= 0 ? "coming in" : "leaving";
   return [
-    `🚨 <b>${safeTitle}</b>`,
+    strategyHeader(title),
     "",
-    "💸 <b>FUNDING UPDATE</b>",
-    tickerLink(symbol),
-    `Net Funding: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
-    `Settlements in update: ${fmtNum(pointsCount, 0)}`
+    "💸 <b>Funding Update:</b>",
+    `1. ${tickerLink(symbol)}: ${fmtUsd(fundingDeltaUsd)} | Net: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
+    `Settlements in update: ${fmtNum(pointsCount, 0)}`,
+    "",
+    ...formatAccountUpdate(summary)
   ].join("\n");
 }

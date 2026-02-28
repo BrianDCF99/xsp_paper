@@ -486,7 +486,8 @@ export class XspV16PaperEngine {
 
     await this.store.setRuntimeValue(key, String(lastTs));
 
-    const message = formatFundingEventMessage(this.cfg.strategy.title, pos.symbol, fundingDeltaUsd, points.length);
+    const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
+    const message = formatFundingEventMessage(this.cfg.strategy.title, pos.symbol, fundingDeltaUsd, points.length, summary);
     const telegramMessageId = await this.telegram.sendMessage(message);
     await this.store.insertAlert("FUNDING_EVENT", pos.symbol, message, pos.id, telegramMessageId);
   }
