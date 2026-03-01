@@ -131,7 +131,7 @@ export function formatXspCommand(title: string, summary: LiveSummary, rows: Open
       const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
       lines.push(
         `${i + 1}. ${tickerLink(r.symbol)}`,
-        `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | DD - ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
+        `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
         `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
         ""
       );
@@ -162,7 +162,7 @@ export function formatXspOpenOnly(title: string, rows: OpenPositionRow[], nowTsM
     const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
     lines.push(
       `${i + 1}. ${tickerLink(r.symbol)}`,
-      `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | DD - ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
+      `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
       `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
       ""
     );
