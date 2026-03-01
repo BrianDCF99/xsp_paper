@@ -19,7 +19,7 @@ function cleanStrategyTitle(title: string): string {
 }
 
 function strategyHeader(title: string): string {
-  return `${XSP_EMOJI} <b>${exchangeLabelFromTitle(title)}:</b> ${escapeHtml(cleanStrategyTitle(title))}`;
+  return `${XSP_EMOJI} ${exchangeLabelFromTitle(title)}: ${escapeHtml(cleanStrategyTitle(title))}`;
 }
 
 function calcShortTpPrice(entryPrice: number, takeProfitPct: number): number {
@@ -44,43 +44,62 @@ function formatAccountUpdate(summary: LiveSummary): string[] {
   ];
 }
 
+function positionLines(row: OpenPositionRow, index: number, nowTsMs: number): string[] {
+  const currentPrice = row.latestMarkPrice ?? row.entryPrice;
+  const tpPrice = calcShortTpPrice(row.entryPrice, row.takeProfitPct);
+  const liqPrice = calcShortLiqPrice(row.entryPrice, row.leverage);
+
+  return [
+    `${index}. ${tickerLink(row.symbol)}`,
+    `E: ${fmtUsd(row.entryPrice)} | PNL: ${fmtPct(row.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(row.entryTsMs, nowTsMs)}`,
+    `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`
+  ];
+}
+
 export function formatSummaryBlock(summary: LiveSummary): string[] {
   return [
     "<b>Live Stats:</b>",
+    "",
     `PNL: ${fmtPct(summary.pnlPct)} | ${fmtUsd(summary.totalPnlUsd)}`,
     `Unrealized PNL: ${fmtUsd(summary.unrealizedPnlUsd)} | ${fmtPct(unrealizedPct(summary))}`,
+    "",
     `Entries: ${summary.entries} | O: ${summary.openPositions} | M: ${summary.missedTrades}`,
     `Winners: ${summary.winners} | Losers: ${summary.losers} | Win %: ${summary.winPct.toFixed(2)}%`,
     `Replaced: ${summary.replaced} | Liq'd: ${summary.liquidated}`,
+    "",
     `Eq: ${fmtUsd(summary.currentEquityUsd)} | Cash: ${fmtUsd(summary.cashUsd)}`,
     `M: ${fmtUsd(summary.marginInUseUsd)} | N: ${fmtUsd(summary.openNotionalUsd)}`,
+    "",
     `Net Funding: ${fmtUsd(summary.openFundingAccruedUsd)}`
   ];
 }
 
 export function formatEntryMessage(title: string, event: StrategyMessageEvent, summary: LiveSummary): string {
   const entryPrice = event.entryPrice ?? 0;
-  const tpPrice = event.takeProfitPrice ?? calcShortTpPrice(entryPrice, 0);
+  const tpPrice = event.takeProfitPrice ?? calcShortTpPrice(entryPrice, (event.leveragedReturnPct ?? 0) / 100);
   const liqPrice = calcShortLiqPrice(entryPrice, event.leverage ?? 0);
+  const isReplacement = event.type === "ENTRY_REPLACE_OPEN_SHORT";
 
   const lines = [
     strategyHeader(title),
     "",
-    event.type === "ENTRY_REPLACE_OPEN_SHORT" ? "♻️ <b>Entry Replace Short</b>" : "🟢 <b>Entry</b>",
+    isReplacement ? "♻️ <b>Entry Replace Short:</b>" : "🟢 <b>Entry:</b>",
     `- Sell Ratio ≤ ${fmtNum(event.sellRatioThreshold ?? 0, 3)} (now ${fmtNum(event.sellRatio ?? 0, 3)})`,
     `- 1h Volume ≥ ${fmtNum(event.volumeThreshold ?? 0, 0)} (now ${fmtNum(event.hourVolume ?? 0, 0)})`,
+    "",
     tickerLink(event.symbol),
     `E: ${fmtUsd(entryPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
     `Entry Slippage: ${fmtNum(event.entrySlippageBps ?? 0, 2)} bps`
   ];
 
-  if (event.type === "ENTRY_REPLACE_OPEN_SHORT" && event.replacedSymbol) {
+  if (isReplacement && event.replacedSymbol) {
+    lines.push("");
     lines.push(`Old Ticker: ${tickerLink(event.replacedSymbol)}`);
     lines.push(`Old Trade PnL: ${fmtPct(event.replacedPnlPct ?? 0)}`);
     lines.push(`Old Trade Unlev: ${fmtPct(event.replacedUnleveredPct ?? 0)}`);
   }
 
-  lines.push("", ...formatAccountUpdate(summary), "", ...formatSummaryBlock(summary));
+  lines.push("", ...formatAccountUpdate(summary));
   return lines.join("\n");
 }
 
@@ -101,15 +120,14 @@ export function formatExitMessage(title: string, event: StrategyMessageEvent, su
     strategyHeader(title),
     "",
     `${icon} <b>EXIT: ${reason}</b>`,
+    "",
     tickerLink(event.symbol),
     `PnL: ${fmtPct(event.leveragedReturnPct ?? 0)}`,
     `Exit Slippage: ${fmtNum(event.exitSlippageBps ?? 0, 2)} bps`,
     `Roundtrip Slippage: ${fmtNum((event.entrySlippageBps ?? 0) + (event.exitSlippageBps ?? 0), 2)} bps`,
     `Funding: ${fmtUsd(event.netFundingFeeUsd ?? 0)}`,
     "",
-    ...formatAccountUpdate(summary),
-    "",
-    ...formatSummaryBlock(summary)
+    ...formatAccountUpdate(summary)
   ].join("\n");
 }
 
@@ -117,24 +135,17 @@ export function formatXspCommand(title: string, summary: LiveSummary, rows: Open
   const lines: string[] = [
     strategyHeader(title),
     "",
-    "📈 Open Positions",
-    "",
-    `<b>OPEN SHORT</b> - Open Positions: ${rows.length}`
+    "📈 Open Positions"
   ];
 
   if (rows.length === 0) {
+    lines.push("");
     lines.push("(none)");
   } else {
+    lines.push("");
     rows.forEach((r, i) => {
-      const currentPrice = r.latestMarkPrice ?? r.entryPrice;
-      const tpPrice = calcShortTpPrice(r.entryPrice, r.takeProfitPct);
-      const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
-      lines.push(
-        `${i + 1}. ${tickerLink(r.symbol)}`,
-        `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
-        `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
-        ""
-      );
+      lines.push(...positionLines(r, i + 1, nowTsMs));
+      if (i !== rows.length - 1) lines.push("");
     });
   }
 
@@ -146,26 +157,19 @@ export function formatXspOpenOnly(title: string, rows: OpenPositionRow[], nowTsM
   const lines: string[] = [
     strategyHeader(title),
     "",
-    "📈 Open Positions",
-    "",
-    `<b>OPEN SHORT</b> - Open Positions: ${rows.length}`
+    "📈 Open Positions"
   ];
 
   if (rows.length === 0) {
+    lines.push("");
     lines.push("(none)");
     return lines.join("\n");
   }
 
+  lines.push("");
   rows.forEach((r, i) => {
-    const currentPrice = r.latestMarkPrice ?? r.entryPrice;
-    const tpPrice = calcShortTpPrice(r.entryPrice, r.takeProfitPct);
-    const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
-    lines.push(
-      `${i + 1}. ${tickerLink(r.symbol)}`,
-      `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
-      `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
-      ""
-    );
+    lines.push(...positionLines(r, i + 1, nowTsMs));
+    if (i !== rows.length - 1) lines.push("");
   });
 
   return lines.join("\n");
@@ -183,6 +187,7 @@ export function formatFundingEventMessage(
     strategyHeader(title),
     "",
     "💸 <b>Funding Update:</b>",
+    "",
     `1. ${tickerLink(symbol)}: ${fmtUsd(fundingDeltaUsd)} | Net: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
     `Settlements in update: ${fmtNum(pointsCount, 0)}`,
     "",
