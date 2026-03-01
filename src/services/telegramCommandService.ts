@@ -3,7 +3,7 @@ import { OpenPositionRow } from "../domain/types.js";
 import { PaperStore } from "../infra/db/paperStore.js";
 import { TelegramClient } from "../infra/telegram/client.js";
 import { Logger } from "../utils/logger.js";
-import { formatInfoCommand, formatXspCommand, formatXspOpenOnly } from "../strategy/v16/messages.js";
+import { formatCoinSummary, formatInfoCommand, formatXspCommand, formatXspOpenTrades } from "../strategy/v16/messages.js";
 
 function formatErrorMeta(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -82,13 +82,41 @@ export class TelegramCommandService {
   private async handleCommand(text: string, chatId: string): Promise<void> {
     const parts = text.split(/\s+/).filter(Boolean);
     const command = parts[0]?.toLowerCase() ?? "";
+    const arg1 = (parts[1] ?? "").trim();
+
+    const normalizeSymbol = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+    const findOpenBySymbol = (rows: OpenPositionRow[], symbolInput: string): OpenPositionRow | null => {
+      const want = normalizeSymbol(symbolInput);
+      if (!want) return null;
+      return rows.find((r) => normalizeSymbol(r.symbol) === want) ?? null;
+    };
+
+    const sendCoinSummary = async (symbolInput: string): Promise<boolean> => {
+      const open = await this.store.getOpenPositions();
+      const row = findOpenBySymbol(open, symbolInput);
+      if (!row) {
+        await this.telegram.sendMessage(`No open trade found for ${normalizeSymbol(symbolInput)}.`, chatId);
+        return true;
+      }
+      await this.telegram.sendMessage(formatCoinSummary(this.cfg.strategy.title, row, Date.now()), chatId);
+      return true;
+    };
 
     if (command === "/xsp") {
       const open = await this.store.getOpenPositions();
-      const subcommand = (parts[1] ?? "").toLowerCase();
+      const subcommand = arg1.toLowerCase();
       if (subcommand === "open") {
-        const message = formatXspOpenOnly(this.cfg.strategy.title, open, Date.now());
+        const botUsername = await this.telegram.getBotUsername();
+        const message = formatXspOpenTrades(this.cfg.strategy.title, open, (symbol) => {
+          if (!botUsername) return null;
+          return `https://t.me/${botUsername}?start=xsp_${encodeURIComponent(symbol)}`;
+        });
         await this.telegram.sendMessage(message, chatId);
+        return;
+      }
+
+      if (arg1 && !arg1.startsWith("-")) {
+        await sendCoinSummary(arg1);
         return;
       }
 
@@ -163,9 +191,20 @@ export class TelegramCommandService {
       return;
     }
 
+    if (command === "/start") {
+      const payload = arg1;
+      if (payload.toLowerCase().startsWith("xsp_")) {
+        const symbolFromPayload = payload.slice(4);
+        if (symbolFromPayload) {
+          await sendCoinSummary(symbolFromPayload);
+          return;
+        }
+      }
+    }
+
     if (command === "/help" || command === "/start") {
       await this.telegram.sendMessage(
-        ["Available commands:", "/xsp", "/xsp open", "/info <strategyName>", "/scan", "/alerts", "/help"].join("\n"),
+        ["Available commands:", "/xsp", "/xsp open", "/xsp <ticker>", "/info <strategyName>", "/scan", "/alerts", "/help"].join("\n"),
         chatId
       );
       return;

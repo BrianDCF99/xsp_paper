@@ -18,6 +18,7 @@ export class TelegramClient {
   private readonly enabled: boolean;
   private readonly token: string;
   private readonly defaultChatId: string;
+  private botUsernameCache: string | null | undefined;
 
   constructor(private readonly cfg: AppConfig["telegram"], private readonly logger: Logger) {
     this.enabled = cfg.enabled;
@@ -68,6 +69,30 @@ export class TelegramClient {
 
     const json = (await res.json()) as { ok?: boolean; result?: TelegramUpdate[] };
     return json.result ?? [];
+  }
+
+  async getBotUsername(): Promise<string | null> {
+    if (!this.enabled) return null;
+    if (this.botUsernameCache !== undefined) return this.botUsernameCache;
+
+    const url = `https://api.telegram.org/bot${this.token}/getMe`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.logger.warn("Telegram getMe failed", { status: res.status, body });
+        this.botUsernameCache = null;
+        return null;
+      }
+      const json = (await res.json()) as { ok?: boolean; result?: { username?: string } };
+      const username = json.result?.username?.trim() ?? "";
+      this.botUsernameCache = username.length > 0 ? username : null;
+      return this.botUsernameCache;
+    } catch (error) {
+      this.logger.warn("Telegram getMe exception", { error: error instanceof Error ? error.message : String(error) });
+      this.botUsernameCache = null;
+      return null;
+    }
   }
 
   extractCommands(updates: TelegramUpdate[]): TelegramCommand[] {

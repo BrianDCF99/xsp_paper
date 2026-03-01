@@ -44,15 +44,28 @@ function formatAccountUpdate(summary: LiveSummary): string[] {
   ];
 }
 
-function positionLines(row: OpenPositionRow, index: number, nowTsMs: number): string[] {
+function coinSummaryLines(row: OpenPositionRow, nowTsMs: number): [string, string, string] {
   const currentPrice = row.latestMarkPrice ?? row.entryPrice;
   const tpPrice = calcShortTpPrice(row.entryPrice, row.takeProfitPct);
   const liqPrice = calcShortLiqPrice(row.entryPrice, row.leverage);
-
   return [
-    `${index}. ${tickerLink(row.symbol)}`,
+    tickerLink(row.symbol),
     `E: ${fmtUsd(row.entryPrice)} | PNL: ${fmtPct(row.latestLeveragedReturnPct ?? 0)} | ${formatElapsedHhMm(row.entryTsMs, nowTsMs)}`,
     `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`
+  ];
+}
+
+function linkedOpenTicker(symbol: string, summaryLink: string | null): string {
+  if (!summaryLink) return escapeHtml(symbol);
+  return `<a href="${escapeHtml(summaryLink)}">${escapeHtml(symbol)}</a>`;
+}
+
+function positionLines(row: OpenPositionRow, index: number, nowTsMs: number): string[] {
+  const [ticker, line1, line2] = coinSummaryLines(row, nowTsMs);
+  return [
+    `${index}. ${ticker}`,
+    line1,
+    line2
   ];
 }
 
@@ -157,7 +170,7 @@ export function formatXspOpenOnly(title: string, rows: OpenPositionRow[], nowTsM
   const lines: string[] = [
     strategyHeader(title),
     "",
-    "📈 Open Positions"
+    "👀 Open Trades:"
   ];
 
   if (rows.length === 0) {
@@ -175,6 +188,41 @@ export function formatXspOpenOnly(title: string, rows: OpenPositionRow[], nowTsM
   return lines.join("\n");
 }
 
+export function formatXspOpenTrades(
+  title: string,
+  rows: OpenPositionRow[],
+  summaryLinkForSymbol: (symbol: string) => string | null
+): string {
+  const lines: string[] = [
+    strategyHeader(title),
+    "",
+    "👀 Open Trades:",
+    ""
+  ];
+
+  if (rows.length === 0) {
+    lines.push("(none)");
+    return lines.join("\n");
+  }
+
+  rows.forEach((row, idx) => {
+    lines.push(`${idx + 1}. ${linkedOpenTicker(row.symbol, summaryLinkForSymbol(row.symbol))}`);
+  });
+
+  return lines.join("\n");
+}
+
+export function formatCoinSummary(title: string, row: OpenPositionRow, nowTsMs: number): string {
+  const [ticker, line1, line2] = coinSummaryLines(row, nowTsMs);
+  return [
+    strategyHeader(title),
+    "",
+    ticker,
+    line1,
+    line2
+  ].join("\n");
+}
+
 export function formatFundingEventMessage(
   title: string,
   symbol: string,
@@ -189,7 +237,6 @@ export function formatFundingEventMessage(
     "💸 <b>Funding Update:</b>",
     "",
     `1. ${tickerLink(symbol)}: ${fmtUsd(fundingDeltaUsd)} | Net: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
-    `Settlements in update: ${fmtNum(pointsCount, 0)}`,
     "",
     ...formatAccountUpdate(summary)
   ].join("\n");
