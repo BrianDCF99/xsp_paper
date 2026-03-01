@@ -10,8 +10,16 @@ function exchangeLabelFromTitle(title: string): "BYBIT" | "MEXC" {
   return "BYBIT";
 }
 
+function cleanStrategyTitle(title: string): string {
+  let out = String(title ?? "").trim();
+  out = out.replace(/\(paper\)/gi, "").trim();
+  out = out.replace(/^bybit[\s:-]*/i, "").trim();
+  out = out.replace(/^mexc[\s:-]*/i, "").trim();
+  return out.length > 0 ? out : String(title ?? "").trim();
+}
+
 function strategyHeader(title: string): string {
-  return `${XSP_EMOJI} <b>${exchangeLabelFromTitle(title)}:</b> ${escapeHtml(title)}`;
+  return `${XSP_EMOJI} <b>${exchangeLabelFromTitle(title)}:</b> ${escapeHtml(cleanStrategyTitle(title))}`;
 }
 
 function calcShortTpPrice(entryPrice: number, takeProfitPct: number): number {
@@ -108,6 +116,7 @@ export function formatExitMessage(title: string, event: StrategyMessageEvent, su
 export function formatXspCommand(title: string, summary: LiveSummary, rows: OpenPositionRow[], nowTsMs: number): string {
   const lines: string[] = [
     strategyHeader(title),
+    "",
     "📈 Open Positions",
     "",
     `<b>OPEN SHORT</b> - Open Positions: ${rows.length}`
@@ -123,12 +132,42 @@ export function formatXspCommand(title: string, summary: LiveSummary, rows: Open
       lines.push(
         `${i + 1}. ${tickerLink(r.symbol)}`,
         `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | DD - ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
-        `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`
+        `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
+        ""
       );
     });
   }
 
   lines.push("", ...formatSummaryBlock(summary));
+  return lines.join("\n");
+}
+
+export function formatXspOpenOnly(title: string, rows: OpenPositionRow[], nowTsMs: number): string {
+  const lines: string[] = [
+    strategyHeader(title),
+    "",
+    "📈 Open Positions",
+    "",
+    `<b>OPEN SHORT</b> - Open Positions: ${rows.length}`
+  ];
+
+  if (rows.length === 0) {
+    lines.push("(none)");
+    return lines.join("\n");
+  }
+
+  rows.forEach((r, i) => {
+    const currentPrice = r.latestMarkPrice ?? r.entryPrice;
+    const tpPrice = calcShortTpPrice(r.entryPrice, r.takeProfitPct);
+    const liqPrice = calcShortLiqPrice(r.entryPrice, r.leverage);
+    lines.push(
+      `${i + 1}. ${tickerLink(r.symbol)}`,
+      `E: ${fmtUsd(r.entryPrice)} | PNL: ${fmtPct(r.latestLeveragedReturnPct ?? 0)} | DD - ${formatElapsedHhMm(r.entryTsMs, nowTsMs)}`,
+      `C: ${fmtUsd(currentPrice)} | TP: ${fmtUsd(tpPrice)} | L: ${fmtUsd(liqPrice)}`,
+      ""
+    );
+  });
+
   return lines.join("\n");
 }
 

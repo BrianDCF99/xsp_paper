@@ -3,7 +3,7 @@ import { OpenPositionRow } from "../domain/types.js";
 import { PaperStore } from "../infra/db/paperStore.js";
 import { TelegramClient } from "../infra/telegram/client.js";
 import { Logger } from "../utils/logger.js";
-import { formatInfoCommand, formatXspCommand } from "../strategy/v16/messages.js";
+import { formatInfoCommand, formatXspCommand, formatXspOpenOnly } from "../strategy/v16/messages.js";
 
 function formatErrorMeta(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -84,23 +84,37 @@ export class TelegramCommandService {
     const command = parts[0]?.toLowerCase() ?? "";
 
     if (command === "/xsp") {
-      const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
       const open = await this.store.getOpenPositions();
+      const subcommand = (parts[1] ?? "").toLowerCase();
+      if (subcommand === "open") {
+        const message = formatXspOpenOnly(this.cfg.strategy.title, open, Date.now());
+        await this.telegram.sendMessage(message, chatId);
+        return;
+      }
+
+      const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
       const message = formatXspCommand(this.cfg.strategy.title, summary, open, Date.now());
       await this.telegram.sendMessage(message, chatId);
       return;
     }
 
     if (command === "/info") {
-      const requested = (parts[1] ?? "").toLowerCase();
+      const requested = (parts[1] ?? "").toLowerCase().trim();
+      if (!requested) {
+        await this.telegram.sendMessage("Usage: /info <strategyName> (e.g. /info xsp)", chatId);
+        return;
+      }
+
       const aliases = new Set([
         "xsp",
         "xsp-paper",
         "xsp_paper",
         this.cfg.strategy.id.toLowerCase(),
+        this.cfg.strategy.id.toLowerCase().replaceAll(":", ""),
         this.cfg.strategy.title.toLowerCase().replaceAll(" ", "")
       ]);
-      if (requested && !aliases.has(requested)) {
+
+      if (!aliases.has(requested)) {
         await this.telegram.sendMessage(
           `Unknown strategy '${requested}'. Try: /info xsp`,
           chatId
@@ -150,7 +164,10 @@ export class TelegramCommandService {
     }
 
     if (command === "/help" || command === "/start") {
-      await this.telegram.sendMessage(["Available commands:", "/xsp", "/info <strategyName>", "/scan", "/alerts", "/help"].join("\n"), chatId);
+      await this.telegram.sendMessage(
+        ["Available commands:", "/xsp", "/xsp open", "/info <strategyName>", "/scan", "/alerts", "/help"].join("\n"),
+        chatId
+      );
       return;
     }
   }
