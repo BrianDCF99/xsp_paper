@@ -4,8 +4,14 @@ import { formatElapsedHhMm } from "../../utils/time.js";
 
 const XSP_EMOJI = "🐦‍🔥";
 
+function exchangeLabelFromTitle(title: string): "BYBIT" | "MEXC" {
+  const t = String(title ?? "").toLowerCase();
+  if (t.includes("mexc")) return "MEXC";
+  return "BYBIT";
+}
+
 function strategyHeader(title: string): string {
-  return `${XSP_EMOJI} Exchange: <b>${escapeHtml(title)}</b>`;
+  return `${XSP_EMOJI} <b>${exchangeLabelFromTitle(title)}:</b> ${escapeHtml(title)}`;
 }
 
 function calcShortTpPrice(entryPrice: number, takeProfitPct: number): number {
