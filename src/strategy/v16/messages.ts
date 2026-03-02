@@ -241,7 +241,7 @@ export function formatFundingBatchMessage(
   ];
 
   rows.forEach((r, idx) => {
-    lines.push(`${idx + 1}. ${tickerLink(r.symbol)}: ${fmtUsd(r.fundingDeltaUsd)} | Net: ${fmtUsd(r.fundingDeltaUsd)}`);
+    lines.push(`${idx + 1}. ${tickerLink(r.symbol)}: ${fmtUsd(r.fundingDeltaUsd)}`);
     if (idx !== rows.length - 1) lines.push("");
   });
 
