@@ -13,11 +13,18 @@ import {
   qtyFromNotional,
   shortUnleveredReturnPct
 } from "./math.js";
-import { formatEntryMessage, formatExitMessage, formatFundingEventMessage } from "./messages.js";
+import { formatEntryMessage, formatExitMessage, formatFundingBatchMessage } from "./messages.js";
 import { V16SignalDetector } from "./signalDetector.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface FundingCycleEvent {
+  positionId: string;
+  symbol: string;
+  fundingDeltaUsd: number;
+  settlements: number;
 }
 
 export class XspV16PaperEngine {
@@ -50,7 +57,8 @@ export class XspV16PaperEngine {
       const lastScanTs = Number(lastScanRaw ?? "0") || 0;
 
       await this.refreshSymbolsIfNeeded(false);
-      await this.evaluateOpenPositionsForExit(lastScanTs, cycleNowTs);
+      const fundingEvents = await this.evaluateOpenPositionsForExit(lastScanTs, cycleNowTs);
+      await this.sendFundingBatchAlert(fundingEvents);
       await this.scanAndHandleSignals();
       await this.store.setRuntimeValue(lastScanKey, String(cycleNowTs));
       this.logger.info("cycle complete", { trigger, durationMs: Date.now() - startedAt });
@@ -234,9 +242,10 @@ export class XspV16PaperEngine {
     return sorted[0] ?? null;
   }
 
-  private async evaluateOpenPositionsForExit(lastScanTs: number, nowTs: number): Promise<void> {
+  private async evaluateOpenPositionsForExit(lastScanTs: number, nowTs: number): Promise<FundingCycleEvent[]> {
     const open = await this.store.getOpenPositions();
-    if (open.length === 0) return;
+    if (open.length === 0) return [];
+    const fundingEvents: FundingCycleEvent[] = [];
 
     for (const pos of open) {
       const reconciledExit =
@@ -265,13 +274,16 @@ export class XspV16PaperEngine {
       const unrealizedPnlWithFunding = grossPnl + fundingAccruedUsd;
 
       await this.store.updatePositionMark(pos.id, mark, nowTs, unlev, lev, unrealizedPnlWithFunding, fundingAccruedUsd);
-      await this.processFundingEvents(pos, nowTs);
+      const fundingEvent = await this.processFundingEvents(pos, nowTs);
+      if (fundingEvent) fundingEvents.push(fundingEvent);
 
       const exit = await this.decideExit(pos, unlev, nowTs);
       if (!exit) continue;
 
       await this.closePositionWithAlert(pos, exit, nowTs, mark);
     }
+
+    return fundingEvents;
   }
 
   private async computeFundingUsd(symbol: string, notionalUsd: number, entryTsMs: number, exitTsMs: number): Promise<number> {
@@ -469,27 +481,61 @@ export class XspV16PaperEngine {
     await this.store.insertAlert(`EXIT_${event.exitReason ?? "UNKNOWN"}`, event.symbol, text, positionId, messageId);
   }
 
-  private async processFundingEvents(pos: OpenPositionRow, nowTs: number): Promise<void> {
-    if (!this.cfg.funding.enabled) return;
+  private async processFundingEvents(pos: OpenPositionRow, nowTs: number): Promise<FundingCycleEvent | null> {
+    if (!this.cfg.funding.enabled) return null;
     const key = `${this.cfg.strategy.id}:funding_last_settle_ts:${pos.id}`;
     const raw = await this.store.getRuntimeValue(key);
     const lastSettledTs = Number(raw ?? "0") || 0;
     const fromTs = Math.max(pos.entryTsMs, lastSettledTs > 0 ? lastSettledTs + 1 : pos.entryTsMs);
-    if (fromTs >= nowTs) return;
+    if (fromTs >= nowTs) return null;
 
     const points = await this.bybit.getFundingHistory(pos.symbol, fromTs, nowTs);
-    if (points.length === 0) return;
+    if (points.length === 0) return null;
 
     const signedRates = points.map((p) => (this.cfg.funding.shortReceivesWhenPositive ? p.fundingRate : -p.fundingRate));
     const fundingDeltaUsd = pos.notionalUsd * signedRates.reduce((a, b) => a + b, 0);
     const lastTs = points.at(-1)?.tsMs ?? fromTs;
 
     await this.store.setRuntimeValue(key, String(lastTs));
+    return {
+      positionId: pos.id,
+      symbol: pos.symbol,
+      fundingDeltaUsd,
+      settlements: points.length
+    };
+  }
+
+  private async sendFundingBatchAlert(events: FundingCycleEvent[]): Promise<void> {
+    if (events.length === 0) return;
+
+    const grouped = new Map<string, { fundingDeltaUsd: number; settlements: number; positionId: string }>();
+    for (const event of events) {
+      const current = grouped.get(event.symbol);
+      if (!current) {
+        grouped.set(event.symbol, {
+          fundingDeltaUsd: event.fundingDeltaUsd,
+          settlements: event.settlements,
+          positionId: event.positionId
+        });
+      } else {
+        current.fundingDeltaUsd += event.fundingDeltaUsd;
+        current.settlements += event.settlements;
+      }
+    }
+
+    const rows = [...grouped.entries()]
+      .map(([symbol, data]) => ({ symbol, fundingDeltaUsd: data.fundingDeltaUsd, settlements: data.settlements, positionId: data.positionId }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
 
     const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
-    const message = formatFundingEventMessage(this.cfg.strategy.title, pos.symbol, fundingDeltaUsd, points.length, summary);
-    const telegramMessageId = await this.telegram.sendMessage(message);
-    await this.store.insertAlert("FUNDING_EVENT", pos.symbol, message, pos.id, telegramMessageId);
+    const text = formatFundingBatchMessage(
+      this.cfg.strategy.title,
+      rows.map((r) => ({ symbol: r.symbol, fundingDeltaUsd: r.fundingDeltaUsd })),
+      summary
+    );
+    const messageId = await this.telegram.sendMessage(text);
+    const alertSymbol = rows.length === 1 ? rows[0]?.symbol ?? "MULTI" : "MULTI";
+    await this.store.insertAlert("FUNDING_EVENT_BATCH", alertSymbol, text, null, messageId);
   }
 
   private estimateDynamicSlippageBps(

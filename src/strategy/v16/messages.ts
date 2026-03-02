@@ -223,23 +223,31 @@ export function formatCoinSummary(title: string, row: OpenPositionRow, nowTsMs: 
   ].join("\n");
 }
 
-export function formatFundingEventMessage(
+export interface FundingBatchMessageRow {
+  symbol: string;
+  fundingDeltaUsd: number;
+}
+
+export function formatFundingBatchMessage(
   title: string,
-  symbol: string,
-  fundingDeltaUsd: number,
-  pointsCount: number,
+  rows: FundingBatchMessageRow[],
   summary: LiveSummary
 ): string {
-  const flow = fundingDeltaUsd >= 0 ? "coming in" : "leaving";
-  return [
+  const lines: string[] = [
     strategyHeader(title),
     "",
     "💸 <b>Funding Update:</b>",
-    "",
-    `1. ${tickerLink(symbol)}: ${fmtUsd(fundingDeltaUsd)} | Net: ${fmtUsd(fundingDeltaUsd)} (${flow})`,
-    "",
-    ...formatAccountUpdate(summary)
-  ].join("\n");
+    ""
+  ];
+
+  rows.forEach((r, idx) => {
+    const flow = r.fundingDeltaUsd >= 0 ? "coming in" : "leaving";
+    lines.push(`${idx + 1}. ${tickerLink(r.symbol)}: ${fmtUsd(r.fundingDeltaUsd)} | Net: ${fmtUsd(r.fundingDeltaUsd)} (${flow})`);
+    if (idx !== rows.length - 1) lines.push("");
+  });
+
+  lines.push("", ...formatAccountUpdate(summary));
+  return lines.join("\n");
 }
 
 export function formatInfoCommand(
