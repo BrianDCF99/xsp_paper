@@ -24,7 +24,6 @@ interface FundingCycleEvent {
   positionId: string;
   symbol: string;
   fundingDeltaUsd: number;
-  settlements: number;
 }
 
 export class XspV16PaperEngine {
@@ -500,31 +499,28 @@ export class XspV16PaperEngine {
     return {
       positionId: pos.id,
       symbol: pos.symbol,
-      fundingDeltaUsd,
-      settlements: points.length
+      fundingDeltaUsd
     };
   }
 
   private async sendFundingBatchAlert(events: FundingCycleEvent[]): Promise<void> {
     if (events.length === 0) return;
 
-    const grouped = new Map<string, { fundingDeltaUsd: number; settlements: number; positionId: string }>();
+    const grouped = new Map<string, { fundingDeltaUsd: number; positionId: string }>();
     for (const event of events) {
       const current = grouped.get(event.symbol);
       if (!current) {
         grouped.set(event.symbol, {
           fundingDeltaUsd: event.fundingDeltaUsd,
-          settlements: event.settlements,
           positionId: event.positionId
         });
       } else {
         current.fundingDeltaUsd += event.fundingDeltaUsd;
-        current.settlements += event.settlements;
       }
     }
 
     const rows = [...grouped.entries()]
-      .map(([symbol, data]) => ({ symbol, fundingDeltaUsd: data.fundingDeltaUsd, settlements: data.settlements, positionId: data.positionId }))
+      .map(([symbol, data]) => ({ symbol, fundingDeltaUsd: data.fundingDeltaUsd, positionId: data.positionId }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
 
     const summary = await this.store.getSummary(this.cfg.strategy.startingEquityUsd);
